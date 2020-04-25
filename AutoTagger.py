@@ -1,12 +1,12 @@
+from requests.auth import HTTPBasicAuth
+import lxml.html
+import argparse
 import requests
+import urllib
+import time
 import json
 import bs4
 import re
-import time
-import argparse
-import lxml.html
-from requests.auth import HTTPBasicAuth
-import urllib
 
 #######################################################################################################################
 #       Use Embedded Login / Adress:                                                                                  #
@@ -20,8 +20,7 @@ booruloinpassw = "password" # Booru User Password                               
 #                                                                                                                     #
 #######################################################################################################################
 
-postnummer = "68" #Automaticly set - don't touch
-postversion = "0" #Automaticly set - don't touch
+defaulttodanbooru = True #By default searches for the danbooru tags. Setting this to False will result in using the best match tags.
 
 parser = argparse.ArgumentParser(description='Commandline usage of AutoTagger - You can skip username, password and adress, when you edited this Python script by setting "embeddedauth" to "True"')
 if embeddedauth == False:
@@ -37,13 +36,18 @@ if embeddedauth == False:
     booruloginname = args.username
     booruloinpassw = args.password
     booruadresse = args.adress
-    
+        
 postnummerstart = str(args.poststart)
 postnummerende = str(args.postend)
 modus = args.mode
 
 if(modus == None):
     modus = 1
+        
+postnummer = "68" #Automaticly set - don't touch
+postversion = "0" #Automaticly set - don't touch
+
+
 
 def RequestPostAdresse():
     #Diese Funktion fragt die URL des Bildes ab
@@ -62,9 +66,15 @@ def IQDBAbfrage(url):
     res = requests.get('https://iqdb.org/?url=' + url)
     soup = bs4.BeautifulSoup(res.text, 'html.parser')
     #Filter um "nur" <img...> zu filtern
-    elems = soup.select('#pages > div:nth-child(2) > table:nth-child(1) > tr:nth-child(2) > td > a > img')
+    #
+    #Sucht nach danbooru tags
+    if(defaulttodanbooru == True):
+        elems = soup.select("a[href*=danbooru] > img")
+    elif(defaulttodanbooru == False):
+        elems = soup.select('#pages > div:nth-child(2) > table:nth-child(1) > tr:nth-child(2) > td > a > img')
     #Entfernt die ersten fünf Elemente, da diese irrelevant sind
     #print(soup)
+    #print(elems)
     tags = elems[0].get('title').split()[5:]
     print(tags)
     UpdateTag(tags)
@@ -95,12 +105,9 @@ def PostLoop(start, ende):
         time.sleep(10) #Waits 10s after each request, so IQDB won't block you
     print("Finished!")
 
-
 if(modus == 1):
-    print("Modus 1")
     postnummer = args.poststart
     RequestPostAdresse()
     print("Finished!")
 elif(modus == 2):
-    print("Modus 2")
     PostLoop(postnummerstart, postnummerende)
