@@ -76,7 +76,7 @@ def IQDBAbfrage(url):
     #print(soup)
     #print(elems)
     tags = elems[0].get('title').split()[5:]
-    print(tags)
+    #print(tags)
     UpdateTag(tags)
 
 def UpdateTag(tagsinput):
@@ -99,8 +99,17 @@ def PostLoop(start, ende):
         postnummer = str(nekomimis)
         try:
             RequestPostAdresse()
+            print("Finished Tagging " + postnummer)
         except:
-            print("Error with Post " + str(nekomimis))
+            global defaulttodanbooru
+            defaulttodanbooru = False
+            try:
+                RequestPostAdresse()
+                print("Error with Danbooru, used best match " + postnummer)
+                defaulttodanbooru = True
+            except:
+                print("Error with Post " + postnummer)
+            defaulttodanbooru = True
         nekomimis += 1
         time.sleep(10) #Waits 10s after each request, so IQDB won't block you
     print("Finished!")
