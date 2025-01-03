@@ -1,122 +1,122 @@
-from requests.auth import HTTPBasicAuth
-import lxml.html
+import sys
+import json
+import time
 import argparse
 import requests
-import urllib
-import time
-import json
-import bs4
-import re
+from bs4 import BeautifulSoup
+from requests.auth import HTTPBasicAuth
 
-#######################################################################################################################
-#       Use Embedded Login / Adress:                                                                                  #
-#                                                                                                                     #
-embeddedauth = False #set this to "True" to skip command args                                                         #
-#                                                                                                                     #
-#                                                                                                                     #
-booruadresse = "http://website:80/" #Insert here your Public Booru Adress - must be reachable from outside            #
-booruloginname = "username" #Booru Username - must have high enough privileges                                        #
-booruloinpassw = "password" # Booru User Password                                                                     #
-#                                                                                                                     #
-#######################################################################################################################
+from config import SZURU_ENDPOINT, SZURU_USERNAME, SZURU_PASSWORD
+from config import SLEEP_TIME, ALLOW_POSSIBLE_MATCH
 
-defaulttodanbooru = True #By default searches for the danbooru tags. Setting this to False will result in using the best match tags.
+HTTP_AUTH = HTTPBasicAuth(SZURU_USERNAME, SZURU_PASSWORD)
 
-parser = argparse.ArgumentParser(description='Commandline usage of AutoTagger - You can skip username, password and adress, when you edited this Python script by setting "embeddedauth" to "True"')
-if embeddedauth == False:
-    parser.add_argument("--username", required=True, help="Username of the Account on the Booru")
-    parser.add_argument("--password", required=True, help="Password of the Account on the Booru")
-    parser.add_argument("--adress", required=True, help="The Adress of the Booru, must be reachable from outside of your network")
-parser.add_argument("--mode", type=int, help="1 = Single Post, 2 = Range of Posts - Default: 1")
-parser.add_argument("--poststart", required=True, help="Post (start) number - Must be lower than 'post-end' when 'mode = 2'")
-parser.add_argument("--postend", help="Post number - Only for 'mode = 2'")
+def get_booru_post_info(post_number: int) -> tuple[str, str]:
+    """
+    Get required post information from the booru.
+    We need to know the content url, so that IQDB can download the picture
+    and we need the version of the post, as it's required for updating the tags.
+
+    :param post_number: The post number
+    :return contentUrl, version
+    """
+    booru_api_url = "{}/api/post/{}".format(SZURU_ENDPOINT, post_number)
+    response_json = requests.get(booru_api_url, headers={'Accept':'application/json'}, auth=HTTP_AUTH).json()
+    return response_json['contentUrl'], response_json['version']
+
+def update_booru_post_info(post_number: int, post_version: int, post_tags: list) -> int:
+    """
+    Update the booru post with new tags.
+    See: https://github.com/rr-/szurubooru/blob/master/doc/API.md#updating-post
+
+    :param post_number: The post number
+    :param post_version: The post version
+    :param post_tags: The post tags
+    :return contentUrl, version
+    """
+    payload = json.dumps({ "version": post_version, "tags": post_tags })
+    headers = {'Accept':'application/json', 'Content-Type': 'application/json'}
+    booru_api_url = "{}/api/post/{}".format(SZURU_ENDPOINT, post_number)
+    requests.put(booru_api_url, headers=headers, auth=HTTP_AUTH, data=payload)
+
+def query_iqdb(content_url: str) -> str:
+    """
+    Query IQDB with our image
+
+    :param content_url: The image url accessible from the internet
+    :return html_response
+    """
+    iqdb_url = "https://iqdb.org/?url={}/{}".format(SZURU_ENDPOINT, content_url)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36'}
+    html_response = requests.get(iqdb_url, headers=headers).text
+    return html_response
+
+def parse_iqdb(html_doc: str) -> list:
+    """
+    Parse IQDB response
+
+    :param html_doc: The html document returned by IQDB
+    :return tags: A string with all containing tags seperated by space
+    """
+    soup = BeautifulSoup(html_doc, 'html.parser')
+
+    # Select first div with pages class
+    div = soup.select_one('#pages')
+    # Get all tables
+    tables = div.find_all("table")
+
+    # Parse tables
+    for table in tables:
+        # Get table header
+        header = [th.text.strip() for th in table.find_all('th')][0]
+        # Skip our own image
+        if header == 'Your image': 
+            continue
+        if header == 'Best match' or (header == 'Possible match' and ALLOW_POSSIBLE_MATCH):
+            # Get image alt text
+            alt_text = table.find_all('img')[0]['alt']
+            return alt_text.split('Tags:')[1].strip().split()
+        
+    # No tags found
+    return []
+
+if not SZURU_ENDPOINT:
+    sys.exit("Please specify your szurubooru endpoint in the config.py file!")
+
+if not SZURU_USERNAME:
+    sys.exit("Please specify your szurubooru username in the config.py file!")
+
+if not SZURU_PASSWORD:
+    sys.exit("Please specify your szurubooru password in the config.py file!")
+
+parser = argparse.ArgumentParser(description='Commandline usage of AutoTagger')
+parser.add_argument("--post", required=True, help="Required - Post number to tag, e.g. 69")
+parser.add_argument("--postend", help="Optional - When set, it will tag all posts between the 'post' number and 'postend' number.")
 args = parser.parse_args()
 
-if embeddedauth == False:
-    booruloginname = args.username
-    booruloinpassw = args.password
-    booruadresse = args.adress
-        
-postnummerstart = str(args.poststart)
-postnummerende = str(args.postend)
-modus = args.mode
+start = int(args.post)
+end = start
+if args.postend is not None:
+    end = int(args.postend)
 
-if(modus == None):
-    modus = 1
-        
-postnummer = "68" #Automaticly set - don't touch
-postversion = "0" #Automaticly set - don't touch
+if start > end:
+    start, end = end, start
 
+for post_number in range(start, end + 1):
+    try:
+        content_url, post_version = get_booru_post_info(post_number)
+        iqdb_html = query_iqdb(content_url)
+        tags = parse_iqdb(iqdb_html)
 
+        if not tags:
+            print("Post {} - No tags found!".format(post_number))
+            continue
 
-def RequestPostAdresse():
-    #Diese Funktion fragt die URL des Bildes ab
-    r2 = requests.get(booruadresse + "/api/post/" + postnummer, headers={'Accept':'application/json'}, auth=HTTPBasicAuth(booruloginname, booruloinpassw))
-    r3 = r2.json()["contentUrl"]
-    r4 = r2.json()["version"]
-    addresseTemp = booruadresse + r3
-    global postversion
-    postversion = r4
-    #print(postversion)
-    #print(addresseTemp)
-    IQDBAbfrage(addresseTemp)
+        update_booru_post_info(post_number, post_version, tags)
+        print("Post {} Tagged Successfully".format(post_number))
 
-def IQDBAbfrage(url):
-    #Diese Funkion lädt das Bild auf IQDB hoch und zieht sich die Tags aus dem "Best-Match" Bild
-    res = requests.get('https://iqdb.org/?url=' + url)
-    soup = bs4.BeautifulSoup(res.text, 'html.parser')
-    #Filter um "nur" <img...> zu filtern
-    #
-    #Sucht nach danbooru tags
-    if(defaulttodanbooru == True):
-        elems = soup.select("a[href*=danbooru] > img")
-    elif(defaulttodanbooru == False):
-        elems = soup.select('#pages > div:nth-child(2) > table:nth-child(1) > tr:nth-child(2) > td > a > img')
-    #Entfernt die ersten fünf Elemente, da diese irrelevant sind
-    #print(soup)
-    #print(elems)
-    tags = elems[0].get('title').split()[5:]
-    #print(tags)
-    UpdateTag(tags)
-
-def UpdateTag(tagsinput):
-    #Diese Funktion macht ein Put-Request, um die Tags auf dem Booru zu setzen
-    #So muss Tagging aussehen: < 'big_breasts' "," 'sex' >
-    taginput = {"version": postversion, "tags": tagsinput}
-    tagtemp = json.dumps(taginput)
-    r2 = requests.put(booruadresse + "/api/post/" + postnummer, headers={'Accept':'application/json', 'Content-Type': 'application/json'}, auth=HTTPBasicAuth(booruloginname, booruloinpassw), data=tagtemp)
-    #print(r2.json())
-    #print(taginput)
-
-def PostLoop(start, ende):
-    #Loop durch die Posts durch. Kann Problematisch sein, da manche Bilder einfach keine Tags zurückgeben und daher die Funktionen abschmieren
-    nekomimis = 0
-    catgirls = 1
-    nekomimis = int(start)
-    catgirls = int(ende)
-    global postnummer
-    while nekomimis <= catgirls:
-        postnummer = str(nekomimis)
-        try:
-            RequestPostAdresse()
-            print("Finished Tagging " + postnummer)
-        except:
-            global defaulttodanbooru
-            defaulttodanbooru = False
-            try:
-                RequestPostAdresse()
-                print("Error with Danbooru, used best match " + postnummer)
-                defaulttodanbooru = True
-            except:
-                print("Error with Post " + postnummer)
-            defaulttodanbooru = True
-        nekomimis += 1
-        time.sleep(10) #Waits 10s after each request, so IQDB won't block you
-    print("Finished!")
-
-if(modus == 1):
-    postnummer = args.poststart
-    RequestPostAdresse()
-    print("Finished!")
-elif(modus == 2):
-    PostLoop(postnummerstart, postnummerende)
+        # Wait before querying IQDB again
+        if post_number < end:
+            time.sleep(SLEEP_TIME)
+    except Exception as error:
+        print("Error occured: ", error)
