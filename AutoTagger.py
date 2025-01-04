@@ -11,6 +11,9 @@ from config import SLEEP_TIME, ALLOW_POSSIBLE_MATCH
 
 HTTP_AUTH = HTTPBasicAuth(SZURU_USERNAME, SZURU_PASSWORD)
 
+# IQDB supports up to 8192KB
+MAX_SIZE = 8388608 # unsure if 8192000 or 8388608 bytes
+
 def get_booru_post_info(post_number: int) -> tuple[str, str]:
     """
     Get required post information from the booru.
@@ -22,6 +25,11 @@ def get_booru_post_info(post_number: int) -> tuple[str, str]:
     """
     booru_api_url = "{}/api/post/{}".format(SZURU_ENDPOINT, post_number)
     response_json = requests.get(booru_api_url, headers={'Accept':'application/json'}, auth=HTTP_AUTH).json()
+
+    # Return thumbnail, if fileSize exceeds maximum of IQDB
+    if response_json['fileSize'] >= MAX_SIZE:
+        return response_json['thumbnailUrl'], response_json['version']
+
     return response_json['contentUrl'], response_json['version']
 
 def update_booru_post_info(post_number: int, post_version: int, post_tags: list) -> int:
